@@ -159,25 +159,25 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
 
             return model
 
-    vae_final = train(vae, train_loader, epochs=100)
+        vae_final = train(vae, train_loader, epochs=100)
 
-    torch.save(vae_final.state_dict(), 'models/model_128.pt')
+        torch.save(vae_final.state_dict(), 'models/model_128.pt')
 
-    """
-    Evaluating the above training through means of auxillary tools:
-    1. Random display of input and respective reconstructions
-    2. Plot demonstrating task reconstruction accuracy (measured by correct pixels)
-    3. Heatmap illustrating individual pixel accuracy
-    """
+        """
+        Evaluating the above training through means of auxillary tools:
+        1. Random display of input and respective reconstructions
+        2. Plot demonstrating task reconstruction accuracy (measured by correct pixels)
+        3. Heatmap illustrating individual pixel accuracy
+        """
 
-    # Load model for testing
-    #model_vae = torch.load('models/model_128.pt', map_location=torch.device(device))
-    model_vae = vae
-    model_vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
-    model_vae.eval()
+        # Load model for testing
+        #model_vae = torch.load('models/model_128.pt', map_location=torch.device(device))
+        model_vae = vae
+        model_vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
+        model_vae.eval()
 
-    # Load "validation" data into PyTorch Framework
-    eval_loader = dataset.data_load(X_validation, y_validation)
+        # Load "validation" data into PyTorch Framework
+        eval_loader = dataset.data_load(X_validation, y_validation)
 
     # Create lists to store input and output (reconstructions)
     X_inp, X_out = [], []
@@ -382,7 +382,9 @@ X_full = [X + y for X, y in zip(X_train, y_train)]
 inp_index = np.insert(np.cumsum([len(i) for i in X_full]), 0, 0)
 # Create reconstructions for items in questions
 rec_loader = dataset.data_load(X_train, y_train)
-X_inp, X_out = validate(model_vae, rec_loader)
+#X_inp, X_out = validate(model_vae, rec_loader)
+X_inp, X_out = utils.validate(model_vae, rec_loader, X_inp, X_out, device)
+
 # Calculate reconstruction accuarcy for items in questions
 rec_diff = utils.accuracy(X_inp, X_out)
 rec_avg = []
