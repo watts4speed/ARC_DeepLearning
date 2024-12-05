@@ -64,14 +64,14 @@ def plot_arc(example_num = None, path ='training'):
     plot_task(example)
 
 # Visualize accuracy across processed items in scatterplot with average line
-def plot_pix_acc(X_inp, X_out, exclude_zero=False):
+def plot_pix_acc(X_inp, X_out, exclude_zero=False, title=""):
     per_diff = utils.accuracy(X_inp, X_out, exclude_zero)
     m = np.mean(per_diff)
 
     _, _ = plt.subplots(figsize=(11,5))
     plt.plot(per_diff, color='steelblue', marker='.', linewidth=0)
     plt.axhline(m, xmax = len(per_diff), color='firebrick')
-    plt.title(f'Accuracy ofn (Tasks: {len(per_diff)})', size='medium')
+    plt.title(f'Accuracy of {title} (Tasks: {len(per_diff)})', size='medium')
     plt.xlabel('Item')
     plt.ylabel('Correct Pixel (%)')
     plt.text(len(per_diff)/2, m+0.01, f'{(m*100).round(2)}%', size='medium', weight='bold')

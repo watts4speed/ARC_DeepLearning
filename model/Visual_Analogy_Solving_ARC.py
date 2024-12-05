@@ -104,7 +104,7 @@ if not os.path.exists('models'):
 
 if True or not os.path.isfile('models/model_128.pt'): # Train
 
-    for r in range(1):
+    for r in range(1000):
         def test_error(model, test_loader):
             model.eval()
             loss = 0
@@ -171,7 +171,6 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
         """
 
         # Load model for testing
-        #model_vae = torch.load('models/model_128.pt', map_location=torch.device(device))
         model_vae = vae
         model_vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
         model_vae.eval()
@@ -179,37 +178,29 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
         # Load "validation" data into PyTorch Framework
         eval_loader = dataset.data_load(X_validation, y_validation)
 
-    # Create lists to store input and output (reconstructions)
-    X_inp, X_out = [], []
-
-    def validate(model, eval_loader):
-        # Put model in evaluation mode and start reconstructions based on latent vector
-        model.eval()
-        with torch.no_grad():
-            for batch_idx, (input, output) in enumerate(eval_loader):
-                in_out = torch.cat((input, output), dim=0).to(device)
-                out, mu, logVar = model(in_out)
-                for i in range(len(in_out)):
-                    X_inp.append(utils.reverse_one_hot_encoder(in_out[i].cpu().numpy()))
-                    X_out.append(utils.reverse_one_hot_encoder(out[i].cpu().numpy()))
-        return X_inp, X_out
-
-    X_inp, X_out = utils.validate(model_vae, eval_loader, X_inp, X_out, device)
+        X_inp, X_out = [], []
+        X_inp, X_out = utils.validate(model_vae, train_loader, X_inp, X_out, device)
+        # Plot differences between input and output matrices (reconstructions)
+        visualize.plot_pix_acc(X_inp, X_out, title='train_loader')
 
 
-    # Visualize five random tasks and their respective reconstructions (output)
-    fig, axs = plt.subplots(2, 5, figsize=(15, 6))
-    # random.seed(4)
-    for i in range(5):
-        # idx = random.randrange(len(X_inp))
-        visualize.plot_one(X_inp[i], axs[0,i], i, 'original input')
-        visualize.plot_one(X_out[i], axs[1,i], i, 'reconstruction')
+        # Create lists to store input and output (reconstructions)
+        # X_inp, X_out = [], []
+        # X_inp, X_out = utils.validate(model_vae, eval_loader, X_inp, X_out, device)
+        # # Plot differences between input and output matrices (reconstructions)
+        # visualize.plot_pix_acc(X_inp, X_out, title='eval_loader')
 
-    # Plot differences between input and output matrices (reconstructions)
-    visualize.plot_pix_acc(X_inp, X_out)
 
-    # Plot heatmap of correct pixel determination by the model (absolute)
-    visualize.plot_pix_heatmap(X_inp, X_out)
+        # # Visualize five random tasks and their respective reconstructions (output)
+        # fig, axs = plt.subplots(2, 5, figsize=(15, 6))
+        # # random.seed(4)
+        # for i in range(5):
+        #     # idx = random.randrange(len(X_inp))
+        #     visualize.plot_one(X_inp[i], axs[0,i], i, 'original input')
+        #     visualize.plot_one(X_out[i], axs[1,i], i, 'reconstruction')
+
+        # Plot heatmap of correct pixel determination by the model (absolute)
+        #visualize.plot_pix_heatmap(X_inp, X_out)
 
 
 """
