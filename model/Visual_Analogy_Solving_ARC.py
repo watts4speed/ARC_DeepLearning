@@ -9,7 +9,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions
 from numpy.linalg import norm
@@ -24,6 +23,7 @@ import visualize
 import utils
 import math
 import dataset
+import models
 
 plot_all = False
 
@@ -67,93 +67,6 @@ if False or plot_all:
 if False or plot_all:
     visualize.showcase_padding(dataset.data_load, X_train, y_train)
 
-## **Variational Autoencoder**
-# Outlines the VAE architecture (modifiable), including encoder, decoder, and probabilistic
-# sampling of latent representation.
-
-class VariationalAutoencoder(nn.Module):
-    def __init__(self, img_channels=10, feature_dim=[128, 2, 2], latent_dim=128):
-        super(VariationalAutoencoder, self).__init__()
-
-        self.f_dim = feature_dim
-        kernel_vae = 4
-        stride_vae = 2
-
-        # Initializing the convolutional layers and 2 full-connected layers for the encoder
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels=img_channels,
-                      out_channels=128,
-                      kernel_size=kernel_vae,
-                      stride=stride_vae),
-            nn.LeakyReLU(),
-            nn.Conv2d(in_channels=128,
-                      out_channels=128,
-                      kernel_size=kernel_vae,
-                      stride=stride_vae),
-            nn.LeakyReLU(),
-            nn.Conv2d(in_channels=128,
-                      out_channels=128,
-                      kernel_size=kernel_vae,
-                      stride=stride_vae),
-            nn.LeakyReLU())
-        self.fc_mu = nn.Linear(np.prod(self.f_dim), latent_dim)
-        self.fc_var = nn.Linear(np.prod(self.f_dim), latent_dim)
-
-        # Initializing the fully-connected layer and convolutional layers for decoder
-        self.dec_inp = nn.Linear(latent_dim, np.prod(self.f_dim))
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=128,
-                               out_channels=128,
-                               kernel_size=kernel_vae,
-                               stride=stride_vae),
-            nn.LeakyReLU(),
-            nn.ConvTranspose2d(in_channels=128,
-                               out_channels=128,
-                               kernel_size=kernel_vae,
-                               stride=stride_vae),
-            nn.LeakyReLU(),
-            # Final Layer
-            nn.ConvTranspose2d(in_channels=128,
-                               out_channels=img_channels,
-                               kernel_size=kernel_vae,
-                               stride=stride_vae),
-            nn.Sigmoid())
-
-    def encode(self, x):
-        # Input is fed into convolutional layers sequentially
-        # The output feature map are fed into 2 fully-connected layers to predict mean (mu) and variance (logVar)
-        # Mu and logVar are used for generating middle representation z and KL divergence loss
-        x = self.encoder(x)
-        x = x.view(-1, np.prod(self.f_dim))
-        mu = self.fc_mu(x)
-        logVar = self.fc_var(x)
-        return mu, logVar
-
-    def reparameterize(self, mu, logVar):
-        # Reparameterization takes in the input mu and logVar and samples the mu + std * eps
-        std = torch.exp(logVar/2)
-        eps = torch.randn_like(std)
-        return mu + std * eps
-
-    def decode(self, z):
-        # z is fed back into a fully-connected layers and then into transpose convolutional layers
-        # The generated output is the same size as the original input
-        x = self.dec_inp(z)
-        x = x.view(-1, self.f_dim[0], self.f_dim[1], self.f_dim[2])
-        x = self.decoder(x)
-        return x.squeeze()
-
-    def forward(self, x):
-        # The entire pipeline of the VAE: encoder -> reparameterization -> decoder
-        # output, mu, and logVar are returned for loss computation
-        mu, logVar = self.encode(x)
-        z = self.reparameterize(mu, logVar)
-        out = self.decode(z)
-        return out, mu, logVar
-
-# Print Architecture
-print(VariationalAutoencoder())
-
 # Check convolutional effect on image/task size (for feature_dim adjustment)
 print(utils.convo_eff(w = 30, num = 3, k = 4, p = 0, s = 2))
 
@@ -177,10 +90,14 @@ y_training, y_validation = [y_train[i] for i in train_idx], [y_train[i] for i in
 
 
 # Define model
-vae = VariationalAutoencoder().to(device)
+vae = models.VariationalAutoencoder().to(device)
+if os.path.isfile('models/model_128.pt'):
+    vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
 
 # Load "training" data into PyTorch Framework
-train_loader = dataset.data_load(X_training, y_training, aug=[True, True, True], batch_size=64, shuffle=True)
+batch_size = 64
+train_loader = dataset.data_load(X_training, y_training, aug=[True, True, True], batch_size=batch_size, shuffle=True)
+test_loader = dataset.data_load(X_test, y_test)
 
 if not os.path.exists('models'):
     os.makedirs('models')
@@ -219,8 +136,7 @@ if not os.path.isfile('models/model_128.pt'): # Train
 
     vae_final = train(vae, train_loader, epochs=100)
 
-    torch.save(vae_final, 'models/model_128.pt')
-    print('new model saved')
+    torch.save(vae_final.state_dict(), 'models/model_128.pt')
 
     """
     Evaluating the above training through means of auxillary tools:
@@ -230,7 +146,10 @@ if not os.path.isfile('models/model_128.pt'): # Train
     """
 
     # Load model for testing
-    model_vae = torch.load('models/model_128.pt', map_location=torch.device(device))
+    #model_vae = torch.load('models/model_128.pt', map_location=torch.device(device))
+    model_vae = vae
+    model_vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
+    model_vae.eval()
 
     # Load "validation" data into PyTorch Framework
     eval_loader = dataset.data_load(X_validation, y_validation)
@@ -250,7 +169,7 @@ if not os.path.isfile('models/model_128.pt'): # Train
                     X_out.append(utils.reverse_one_hot_encoder(out[i].cpu().numpy()))
         return X_inp, X_out
 
-    X_inp, X_out = utils.validate(model_vae, X_inp, X_out, eval_loader)
+    X_inp, X_out = utils.validate(model_vae, eval_loader, X_inp, X_out, device)
 
 
     # Visualize five random tasks and their respective reconstructions (output)
@@ -291,7 +210,10 @@ sol_concept = [11, 14, 17, 51, 52, 53, 54, 55, 57, 59, 74, 82, 100, 135] # conce
 sol_full = eval("sol_" + utils.focus)
 
 # Load model for model performance
-model_vae = torch.load('models/model_128.pt', weights_only=False, map_location=torch.device(device))
+#model_vae = torch.load('models/model_128.pt', weights_only=False, map_location=torch.device(device))
+model_vae = vae
+model_vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
+model_vae.eval()
 
 """
 #%% md
