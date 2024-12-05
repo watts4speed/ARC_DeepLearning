@@ -68,7 +68,7 @@ if False or plot_all:
     visualize.showcase_padding(dataset.data_load, X_train, y_train)
 
 # Check convolutional effect on image/task size (for feature_dim adjustment)
-print(utils.convo_eff(w = 30, num = 3, k = 4, p = 0, s = 2))
+print(f'convo_eff(): {utils.convo_eff(w = 30, num = 3, k = 4, p = 0, s = 2)}')
 
 """
 Training the layers/weights of the VAE to generate representations allowing for accurate 
@@ -102,37 +102,62 @@ test_loader = dataset.data_load(X_test, y_test)
 if not os.path.exists('models'):
     os.makedirs('models')
 
-if not os.path.isfile('models/model_128.pt'): # Train
-    # Training the network for a given number of epochs
-    def train(model, train_loader, epochs=50):
-        optimizer = AdamW(model.parameters(), lr=0.0002, weight_decay=0.1)
-        for epoch in range(epochs):
+if True or not os.path.isfile('models/model_128.pt'): # Train
+
+    for r in range(1):
+        def test_error(model, test_loader):
+            model.eval()
+            loss = 0
+            with torch.no_grad():
+                for batch_idx, (input, output) in enumerate(test_loader):
+                    in_out = torch.cat((input, output), dim=0).to(device)
+                    out, mu, logVar = model(in_out)
+                    loss += F.binary_cross_entropy(out, in_out, reduction='sum')
             model.train()
-            for batch_idx, (input, output) in enumerate(train_loader):
+            return loss.item()/len(test_loader)
 
-                # Combine input & output, adding noise, attaching to device
-                in_out = torch.cat((input, output), dim=0)
-                in_out = in_out.to(device)
+        # Training the network for a given number of epochs
+        def train(model, train_loader, epochs=50):
+            optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.2)
+            for epoch in range(epochs):
+                model.train()
+                train_loss = 0
+                for batch_idx, (input, output) in enumerate(train_loader):
 
-                # Potential Denoised VAE variant; leave commented as this proved unfruitful
-                # in_out_noisy = add_noise(in_out, noise=0.2)
-                # in_out_noisy = in_out_noisy.to(device)
+                    # Combine input & output, adding noise, attaching to device
+                    in_out = torch.cat((input, output), dim=0)
+                    in_out = in_out.to(device)
 
-                # Feeding a batch of images into the network to obtain the output image, mu, and logVar
-                out, mu, logVar = model(in_out)
+                    # Potential Denoised VAE variant; leave commented as this proved unfruitful
+                    # in_out_noisy = add_noise(in_out, noise=0.2)
+                    # in_out_noisy = in_out_noisy.to(device)
 
-                # The loss is the BCE loss combined with the KL divergence to ensure the distribution is learnt
-                kl_divergence = -0.5 * torch.sum(1 + logVar - mu.pow(2) - logVar.exp())
-                loss = F.binary_cross_entropy(out, in_out, reduction='sum') + kl_divergence
+                    # Feeding a batch of images into the network to obtain the output image, mu, and logVar
+                    out, mu, logVar = model(in_out)
 
-                # Backpropagation based on the loss
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    # The loss is the BCE loss combined with the KL divergence to ensure the distribution is learnt
+                    kl_divergence = -0.5 * torch.sum(1 + logVar - mu.pow(2) - logVar.exp())
+                    bce = F.binary_cross_entropy(out, in_out, reduction='sum')
+                    loss = bce + kl_divergence
+                    train_loss += bce.item()
 
-            print('Epoch {}: Loss {}'.format(epoch+1, loss))
+                    # Backpropagation based on the loss
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
-        return model
+
+                test_loss = test_error(model, test_loader)
+
+                if epoch % 5 == 0:
+                    print(f'Epoch: {epoch+1}, Loss: {train_loss/(len(train_loader)*batch_size):.1f}  '
+                          f'test_loss: {test_loss:.1f}')
+                    train_loss = 0
+
+                if epoch % 100 == 0:
+                    torch.save(model.state_dict(), 'models/model_128.pt')
+
+            return model
 
     vae_final = train(vae, train_loader, epochs=100)
 
