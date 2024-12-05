@@ -1,422 +1,42 @@
 
 # Import standard library packages
-import os
-import json
-import random
-import time
-#import cv2
-import pickle
-import warnings
-warnings.filterwarnings("ignore") # to reduce unnecessary output
+# warnings.filterwarnings("ignore") # to reduce unnecessary output
 
-# Import external packages
+import os
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mtick
-import seaborn as sns
-import plotly.figure_factory as ff
 import statsmodels.api as sm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions
-import torchvision
 from numpy.linalg import norm
-from matplotlib import colors
-from scipy.stats import mode
 from scipy.stats.mstats import zscore
 from sklearn.linear_model import LinearRegression
 from sklearn.feature_selection import RFECV
 from sklearn.metrics.pairwise import cosine_similarity
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from stepwise_regression.step_reg import forward_regression, backward_regression
-from keras.utils import to_categorical
-#from google.colab import drive
 from torch.optim import AdamW
-from torch.utils.data import Dataset, DataLoader
+import visualize
+import utils
+import math
+import dataset
+
+plot_all = False
 
 # Assign device used for script (e.g., model, processing)
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f"You are using a {device.type} device.")
-
-# Define directory to access image folders, labels, and pre-trained models
-#drive.mount('/content/drive', force_remount = True)
-#our_data_dir = './'
-
-# Calculates how many pixels match between input and output
-def accuracy(X_inp, X_out, exclude_zero=False):
-    per_diff = []
-
-    # Option to exclude the color zero for accuarcy calculations
-    if exclude_zero:
-        for i in range(len(X_inp)):
-            raw_diff = np.count_nonzero(np.logical_and(X_inp[i] == X_out[i], X_inp[i] != 0))
-            (per_diff.append(raw_diff / np.count_nonzero(X_inp[i])) if np.count_nonzero(X_inp[i]) != 0 else per_diff.append(0))
-
-    else:
-        for i in range(len(X_inp)):
-            raw_diff = np.count_nonzero(X_inp[i] == X_out[i])
-            per_diff.append(raw_diff / X_inp[i].size)
-
-    return per_diff
-
-# Retrieve original input and reconstructed output for a model in evaluation mode.
-def validate(model, eval_loader):
-    # Put model in evaluation mode and start reconstructions based on latent vector
-    model.eval()
-    with torch.no_grad():
-        for batch_idx, (input, output) in enumerate(eval_loader):
-            in_out = torch.cat((input, output), dim=0).to(device)
-            z_out, _ = model.encode(in_out)
-            out = model.decode(z_out)
-            for i in range(len(in_out)):
-                X_inp.append(reverse_one_hot_encoder(in_out[i].cpu().numpy()))
-                X_out.append(reverse_one_hot_encoder(out[i].cpu().numpy()))
-    return X_inp, X_out
-
-# Print fully and partially solved items (100% vs. 95%)
-def solved_tasks(X_inp, X_out):
-    per_diff = accuracy(X_inp, X_out)
-
-    full_comp = [i for i, e in enumerate(per_diff) if e == 1] # 100%
-    nfull_comp = [i for i, e in enumerate(per_diff) if 1 > e > 0.95] # 95%
-
-    print(f'The approach fully solved:')
-    print(*full_comp, sep = ', ')
-    print(f'The approach nearly solved:')
-    print(*nfull_comp, sep = ', ')
-
-    return full_comp
-
-# Splits a list in half and returns each
-def split_list(a_list):
-    half = len(a_list)//2
-
-    return a_list[:half], a_list[half:]
-
-# Calculates the effect of convolution (amount, kernel, padding, stride) on the image dimensions (w x h)
-def convo_eff(w = 30, num = 1, k = 3, p = 0, s = 1):
-    for i in range(num):
-        w = ((w - k + (2*p))/s) + 1
-
-    return w
-
-# Adds noise to the custom ARC format (empty cells = no color) for denoised Autoencoder
-def add_noise(X, noise=0.3):
-    X_noise = X[0].unsqueeze(0)
-    for i in range(1, len(X)):
-        # Clone tensor
-        X_clone = X[i].detach().clone()
-
-        # Count the number of 1s in the array
-        num_ones = torch.count_nonzero(X_clone).item()
-
-        # Calculate the number of 1s to replace with 0s
-        num_to_replace = int(noise * num_ones)
-
-        # Get the indices of the 1s
-        indices = torch.argwhere(X_clone == 1).transpose(1,0)
-
-        # Randomly shuffle the indices of the 1s
-        idx = torch.randperm(indices[0].nelement())
-        indices = indices[:, idx]
-
-        # Replace the first num_to_replace 1s with 0s
-        indices_to_replace = indices[:, :num_to_replace]
-        X_clone[indices_to_replace[0,:], indices_to_replace[1,:], indices_to_replace[2,:]] = 0
-
-        X_noise = torch.cat((X_noise, X_clone.unsqueeze(0)), dim=0)
-
-    return X_noise
-
-# Padding of the ARC matrices for convolutional processing
-def padding(X, height=30, width=30, direction='norm'):
-    h = X.shape[0]
-    w = X.shape[1]
-
-    a = (height - h) // 2
-    aa = height - a - h
-
-    b = (width - w) // 2
-    bb = width - b - w
-
-    if direction == 'norm':
-        X_pad = np.pad(X, pad_width=((a, aa), (b, bb)), mode='constant')
-
-    # Reverse padding for rescaling
-    else:
-        if height == 30 and width == 30:
-            X_pad = X[:, :]
-        elif height == 30:
-            X_pad = X[:, abs(bb):b]
-        elif width == 30:
-            X_pad = X[abs(aa):a, :]
-        else:
-            X_pad = X[abs(aa):a, abs(bb):b]
-
-    return X_pad
-
-# Scaling of the ARC matrices using the Kronecker Product, retaining all the information
-def scaling(X, height=30, width=30, direction='norm'):
-    h = height/X.shape[0]
-    w = width/X.shape[1]
-    d = np.floor(min(h, w)).astype(int)
-
-    X_scaled = np.kron(X, np.ones((d, d)))
-
-    if direction == 'norm':
-        return padding(X_scaled, height, width).astype(int)
-
-    # Retain information for reverse scaling
-    else:
-        return d, X_scaled.shape
-
-# Reverse scaling of the ARC matrices for final computations
-def reverse_scaling(X_orig, X_pred):
-    d, X_shape = scaling(X_orig, 30, 30, direction='rev') # get scaling information
-    X_pad_rev = padding(X_pred, X_shape[0], X_shape[1], direction='rev') # reverse padding
-
-    mm = X_shape[0] // d
-    nn = X_shape[1] // d
-    X_sca_rev = X_pad_rev[:mm*d, :nn*d].reshape(mm, d, nn, d)
-
-    X_rev = np.zeros((mm, nn)).astype(int)
-    for i in range(mm):
-        for j in range(nn):
-            X_rev[i,j] = mode(X_sca_rev[i,:,j,:], axis=None, keepdims=False)[0]
-
-    return X_rev
-
-# One-Hot-Encoding (i.e., dummy coding) of ARC matrices for 10 colors (w x h x color)
-def one_hot_encoder(X):
-    one_hot = (np.arange(10) == X[..., None]).astype(int)
-
-    return np.transpose(one_hot, axes = [2,0,1])
-
-# Reverse One-Hot-Encoding for easier visualization & final computations
-def reverse_one_hot_encoder(X):
-    return np.argmax(np.transpose(X, axes=[1,2,0]), axis=-1)
-
-# Replace values in array with new ones from dictionary
-def replace_values(X, dic):
-    return np.array([dic.get(i, -1) for i in range(X.min(), X.max() + 1)])[X - X.min()]
-
-# Convert ARC grids into numpy arrays
-def get_all_matrix(X_full):
-    X_fill = []
-    for X_task in X_full:
-        for X_single in X_task:
-            X_fill.append(np.array(X_single))
-
-    return X_fill
-
-# Apply scaling, padding, and one-hot-encoding to arrays to get finalized grids
-def get_final_matrix(X_full, stage="train"):
-    if stage != "train":
-        X_full = get_all_matrix(X_full)
-
-    X_full_mat = []
-    for i in range(len(X_full)):
-        X_sca = scaling(X_full[i], 30, 30)
-        X_one = one_hot_encoder(X_sca)
-        X_full_mat.append(X_one)
-
-    return X_full_mat
-
-# Augment color of grids: randomly assign new colors to each color within a grid (creates 9 copies of original)
-def augment_color(X_full, y_full):
-    X_flip = []
-    y_flip = []
-    for X, y in zip(X_full, y_full):
-        X_rep = np.tile(X, (10, 1, 1))
-        X_flip.append(X_rep[0])
-        y_rep = np.tile(y, (10, 1, 1))
-        y_flip.append(y_rep[0])
-        for i in range(1, len(X_rep)):
-            rep = np.arange(10)
-            orig = np.arange(10)
-            np.random.shuffle(rep)
-            dic = dict(zip(orig, rep))
-            X_flip.append(replace_values(X_rep[i], dic))
-            y_flip.append(replace_values(y_rep[i], dic))
-
-    return X_flip, y_flip
-
-# Augment orientation of grids: randomly rotates certain grids by 90, 180, or 270 degrees
-def augment_rotate(X_full, y_full):
-    X_rot = []
-    y_rot = []
-    for X, y in zip(X_full, y_full):
-        k = random.randint(0, 4)
-        X_rot.append(np.rot90(X, k))
-        y_rot.append(np.rot90(y, k))
-
-    return X_rot, y_rot
-
-# Midpoint mirroring of grids: Creates copies of grids and mirrors at midpoint the left side
-def augment_mirror(X_full, y_full):
-    X_mir = []
-    y_mir = []
-    for X, y in zip(X_full, y_full):
-        X_mir.append(X)
-        y_mir.append(y)
-
-        X_rep = X.copy()
-        n = X_rep.shape[1]
-        for i in range(n // 2):
-            X_rep[:, n - i - 1] = X_rep[:, i]
-
-        y_rep = y.copy()
-        n = y_rep.shape[1]
-        for i in range(n // 2):
-            y_rep[:, n - i - 1] = y_rep[:, i]
-
-        X_mir.append(X_rep)
-        y_mir.append(y_rep)
-
-    return X_mir, y_mir
-
-# Combines array creation, augmentation, and preprocessing (e.g., scaling)
-def preprocess_matrix(X_full, y_full, aug=[True, True, True]):
-    X_full = get_all_matrix(X_full)
-    y_full = get_all_matrix(y_full)
-
-    if aug[0]:
-        print("Augmentation: Random Color Flipping")
-        X_full, y_full = augment_color(X_full, y_full)
-
-    if aug[1]:
-        print("Augmentation: Random Rotation")
-        X_full, y_full = augment_rotate(X_full, y_full)
-
-    if aug[2]:
-        print("Augmentation: Midpoint Mirroring")
-        X_full, y_full = augment_mirror(X_full, y_full)
-
-    X_full = get_final_matrix(X_full)
-    y_full = get_final_matrix(y_full)
-
-    return X_full, y_full
-
-# Visualize one item
-def plot_one(task, ax, i, train_or_test, input_or_output='!'):
-    cmap = colors.ListedColormap(
-    ['#000000', '#0074D9','#FF4136','#2ECC40','#FFDC00',
-     '#AAAAAA', '#F012BE', '#FF851B', '#7FDBFF', '#870C25'])
-    norm = colors.Normalize(vmin=0, vmax=9)
-
-    if input_or_output == '!':
-        input_matrix = task
-    else:
-        input_matrix = task[train_or_test][i][input_or_output]
-
-    ax.imshow(input_matrix, cmap=cmap, norm=norm)
-    ax.grid(True, which='both', color='lightgrey', linewidth=0.5)
-    ax.set_yticks([x-0.5 for x in range(1+len(input_matrix))])
-    ax.set_xticks([x-0.5 for x in range(1+len(input_matrix[0]))])
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.set_title(train_or_test + ' ' + input_or_output, size='small')
-
-# Visualize entire item
-def plot_task(task, idx):
-    num_train = len(task['train'])
-    fig, axs = plt.subplots(2, num_train, figsize=(2.5*num_train,2.5*2))
-    for i in range(num_train):
-        plot_one(task, axs[0,i], i, 'train', 'input')
-        plot_one(task, axs[1,i], i, 'train', 'output')
-    plt.tight_layout()
-    plt.show()
-
-    num_test = len(task['test'])
-    num_outp = len(task['test'][0])
-    fig, axs = plt.subplots(2, num_test, figsize=(2.5*num_test,2.5*2))
-    if num_test == 1:
-        plot_one(task, axs[0], 0, 'test', 'input')
-        if num_outp > 1:
-            plot_one(task, axs[1], 0, 'test', 'output')
-    else:
-        for i in range(num_test):
-            plot_one(task, axs[0,i], i, 'test', 'input')
-            plot_one(task, axs[1,i], i, 'test', 'output')
-    plt.tight_layout()
-    plt.show()
-
-# Plot random ARC item
-def plot_ARC(example_num = None, path = 'training'):
-    idx = random.randint(0, 99) if example_num is None else example_num
-
-    task_file = f'{eval(path + "_path")}{(eval(path + "_tasks_files"))[idx]}'
-    with open(task_file, 'r') as f:
-        example = json.load(f)
-
-    plot_task(example, idx)
-
-# Visualize accuracy across processed items in scatterplot with average line
-def plot_pix_acc(X_inp, X_out, exclude_zero=False):
-    per_diff = accuracy(X_inp, X_out, exclude_zero)
-    m = np.mean(per_diff)
-
-    fig, ax = plt.subplots(figsize=(11,5))
-    plt.plot(per_diff, color='steelblue', marker='.', linewidth=0)
-    plt.axhline(m, xmax = len(per_diff), color='firebrick')
-    plt.title(f'Accuracy ofn (Tasks: {len(per_diff)})', size='medium')
-    plt.xlabel('Item')
-    plt.ylabel('Correct Pixel (%)')
-    plt.text(len(per_diff)/2, m+0.01, f'{(m*100).round(2)}%', size='medium', weight='bold')
-    plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(xmax=max([1])))
-    plt.ylim(-0.01, 1.01)
-    plt.margins(x=0.01)
-    plt.show()
-    print(f'Number of 100% Correct: {per_diff.count(1)}')
-    print(f'Number of 90%+ Correct: {sum(i >= 0.9 for i in per_diff)}')
-    print(f'Number of 80%+ Correct: {sum(i >= 0.8 for i in per_diff)}')
-    print(f'Number of 70%+ Correct: {sum(i >= 0.7 for i in per_diff)}')
-
-# Visualize heatmap of individually solved pixels
-def plot_pix_heatmap(X_inp, X_out):
-    pix_diff = []
-    for i in range(len(X_inp)):
-        pix_diff.append(X_inp[i] == X_out[i])
-
-    pix_sum = np.sum(pix_diff, axis=0)
-
-    fig, ax = plt.subplots(figsize=(5,5))
-    heatmap = sns.heatmap(pix_sum, cmap='inferno_r', square=True) # oder viridis_r
-    plt.title('Accuracy of Individual Pixel Reconstruction', size='medium', y=1.04)
-    plt.text(0.2, 32, f'Number of 100% Correct Pixels: {np.count_nonzero((pix_sum == len(X_inp)))}', size='medium')
-    plt.axis('off')
-    plt.show()
-
-
-# Define the three possible data pathways
-training_path = f'../data/data_training/'
-evaluation_path = f'../data/data_evaluation/'
-concept_path = f'../data/data_concept/'
-
-# Store the sorted item names accordingly
-training_tasks_files = sorted(os.listdir(training_path))
-evaluation_tasks_files = sorted(os.listdir(evaluation_path))
-concept_tasks_files = sorted(os.listdir(concept_path))
-
-
-# Load the data into the objects X_test, y_test, X_train, y_train
-focus = "evaluation" #  Define dataset to use for the rest of the script: "training", "evaluation", "concept"
-
-# Load items from file list and open JSON files
-focus_tasks = []
-for task_file in eval(focus + "_tasks_files"):
-    with open(f'{eval(focus + "_path")}{task_file}', 'r') as f:
-        task = json.load(f)
-        focus_tasks.append(task)
 
 # train: train (example) inputs (X) and output (y)
 # test: test inputs (X) and output (y)
 X_test, y_test, X_train, y_train = [[] for _ in range(4)]
 
 # Distinguish between train (example) and test grids (input vs output)
-for task in focus_tasks:
+for task in utils.focus_tasks:
     Xs_test, ys_test, Xs_train, ys_train = [[] for _ in range(4)]
 
     for pair in task["test"]:
@@ -440,79 +60,12 @@ for i in range(len(X_test)):
         y_test[i] = [y_test[i][test_item]]
 
 # Example
-print(X_test[3])
+if False or plot_all:
+    print(X_test[3])
+    visualize.summary_plot(X_test)
 
-
-# Plot chosen items
-matrices = get_all_matrix(X_test)
-
-plot_ARC(29, path = "concept")
-
-
-# Plot distribution of mean colors
-means = [np.mean(matrix) for matrix in matrices]
-fig = ff.create_distplot([means], group_labels=["Means"], colors=["green"])
-fig.update_layout(title_text="Distribution of matrix mean values")
-
-
-
-# Plot joint plot of item dimensions: scatter plot, density plot, distribution plot
-heights = [np.shape(matrix)[0] for matrix in matrices]
-widths = [np.shape(matrix)[1] for matrix in matrices]
-
-plot = sns.jointplot(x=widths, y=heights, kind="kde", fill=True, thresh = 0.09, color="blueviolet")
-plot.set_axis_labels(xlabel="Width", ylabel="Height", fontsize=14)
-plt.show()
-
-plot = sns.jointplot(x=widths, y=heights, kind="reg", color="blueviolet")
-plot.set_axis_labels(xlabel="Width", ylabel="Height", fontsize=14)
-plt.show()
-
-
-# PyTorch Dataset Framework: Custom processing of data (incl. Augmentations, Padding)
-class ARCDataset(Dataset):
-    def __init__(self, X, y, stage="train", aug=[True, True, True]):
-        self.stage = stage
-
-        if self.stage == "train":
-            self.X, self.y = preprocess_matrix(X, y, aug)
-        else:
-            self.X = get_final_matrix(X, self.stage)
-
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, idx):
-        inp = self.X[idx]
-        inp = torch.tensor(inp, dtype=torch.float32)
-
-        if self.stage == "train":
-            outp = self.y[idx]
-            outp = torch.tensor(outp, dtype=torch.float32)
-            return inp, outp
-        else:
-            return inp
-
-# Defining loaders function to ease data preparation
-def data_load(X_train, y_train, stage="train", aug=[False, False, False], batch_size=1, shuffle=False):
-    # Define what augmentations are applied, batch size, and if shuffling is desired
-
-    data_set = ARCDataset(X_train, y_train, stage=stage, aug=aug)
-    data_loader = DataLoader(data_set, batch_size=batch_size, shuffle=shuffle)
-    del data_set
-
-    return data_loader
-
-# Showcase Padding, One-Hot Encoding, Dimensionality, and Augmentations
-train_loader = data_load(X_train, y_train, aug=[True, True, True], shuffle=True)
-# e.g., all augmentations are applied
-
-fig, axs = plt.subplots(2, 5, figsize=(15, 6))
-for i in range(5):
-    idx = random.randrange(len(train_loader.dataset.X)) # a random grid is chosen
-    plot_one(reverse_one_hot_encoder(train_loader.dataset.X[idx]), axs[0,i], i, 'input')
-    plot_one(reverse_one_hot_encoder(train_loader.dataset.y[idx]), axs[1,i], i, 'output')
-plt.show()
+if False or plot_all:
+    visualize.showcase_padding(dataset.data_load, X_train, y_train)
 
 ## **Variational Autoencoder**
 # Outlines the VAE architecture (modifiable), including encoder, decoder, and probabilistic
@@ -602,7 +155,7 @@ class VariationalAutoencoder(nn.Module):
 print(VariationalAutoencoder())
 
 # Check convolutional effect on image/task size (for feature_dim adjustment)
-print(convo_eff(w = 30, num = 3, k = 4, p = 0, s = 2))
+print(utils.convo_eff(w = 30, num = 3, k = 4, p = 0, s = 2))
 
 """
 Training the layers/weights of the VAE to generate representations allowing for accurate 
@@ -627,87 +180,92 @@ y_training, y_validation = [y_train[i] for i in train_idx], [y_train[i] for i in
 vae = VariationalAutoencoder().to(device)
 
 # Load "training" data into PyTorch Framework
-train_loader = data_load(X_training, y_training, aug=[True, True, True], batch_size=64, shuffle=True)
+train_loader = dataset.data_load(X_training, y_training, aug=[True, True, True], batch_size=64, shuffle=True)
 
-# Training the network for a given number of epochs
-def train(model, train_loader, epochs=50):
-    optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.2)
-    for epoch in range(epochs):
-        model.train()
-        for batch_idx, (input, output) in enumerate(train_loader):
+if not os.path.exists('models'):
+    os.makedirs('models')
 
-            # Combine input & output, adding noise, attaching to device
-            in_out = torch.cat((input, output), dim=0)
-            in_out = in_out.to(device)
+if not os.path.isfile('models/model_128.pt'): # Train
+    # Training the network for a given number of epochs
+    def train(model, train_loader, epochs=50):
+        optimizer = AdamW(model.parameters(), lr=0.0002, weight_decay=0.1)
+        for epoch in range(epochs):
+            model.train()
+            for batch_idx, (input, output) in enumerate(train_loader):
 
-            # Potential Denoised VAE variant; leave commented as this proved unfruitful
-            # in_out_noisy = add_noise(in_out, noise=0.2)
-            # in_out_noisy = in_out_noisy.to(device)
+                # Combine input & output, adding noise, attaching to device
+                in_out = torch.cat((input, output), dim=0)
+                in_out = in_out.to(device)
 
-            # Feeding a batch of images into the network to obtain the output image, mu, and logVar
-            out, mu, logVar = model(in_out)
+                # Potential Denoised VAE variant; leave commented as this proved unfruitful
+                # in_out_noisy = add_noise(in_out, noise=0.2)
+                # in_out_noisy = in_out_noisy.to(device)
 
-            # The loss is the BCE loss combined with the KL divergence to ensure the distribution is learnt
-            kl_divergence = -0.5 * torch.sum(1 + logVar - mu.pow(2) - logVar.exp())
-            loss = F.binary_cross_entropy(out, in_out, reduction='sum') + kl_divergence
+                # Feeding a batch of images into the network to obtain the output image, mu, and logVar
+                out, mu, logVar = model(in_out)
 
-            # Backpropagation based on the loss
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                # The loss is the BCE loss combined with the KL divergence to ensure the distribution is learnt
+                kl_divergence = -0.5 * torch.sum(1 + logVar - mu.pow(2) - logVar.exp())
+                loss = F.binary_cross_entropy(out, in_out, reduction='sum') + kl_divergence
 
-        print('Epoch {}: Loss {}'.format(epoch+1, loss))
+                # Backpropagation based on the loss
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-    return model
+            print('Epoch {}: Loss {}'.format(epoch+1, loss))
 
-vae_final = train(vae, train_loader, epochs=30)
+        return model
 
-torch.save(vae_final, '/content/drive/MyDrive/Thesis_LucaThoms/Models/model_128.pt')
+    vae_final = train(vae, train_loader, epochs=100)
 
-"""
-Evaluating the above training through means of auxillary tools:
-1. Random display of input and respective reconstructions
-2. Plot demonstrating task reconstruction accuracy (measured by correct pixels)
-3. Heatmap illustrating individual pixel accuracy
-"""
+    torch.save(vae_final, 'models/model_128.pt')
+    print('new model saved')
 
-# Load model for testing
-model_vae = torch.load('/content/drive/MyDrive/Thesis_LucaThoms/Models/model_128_bce_4k_2s_wd02.pt', map_location=torch.device(device))
+    """
+    Evaluating the above training through means of auxillary tools:
+    1. Random display of input and respective reconstructions
+    2. Plot demonstrating task reconstruction accuracy (measured by correct pixels)
+    3. Heatmap illustrating individual pixel accuracy
+    """
 
-# Load "validation" data into PyTorch Framework
-eval_loader = data_load(X_validation, y_validation)
+    # Load model for testing
+    model_vae = torch.load('models/model_128.pt', map_location=torch.device(device))
 
-# Create lists to store input and output (reconstructions)
-X_inp, X_out = [], []
+    # Load "validation" data into PyTorch Framework
+    eval_loader = dataset.data_load(X_validation, y_validation)
 
-def validate(model, eval_loader):
-    # Put model in evaluation mode and start reconstructions based on latent vector
-    model.eval()
-    with torch.no_grad():
-        for batch_idx, (input, output) in enumerate(eval_loader):
-            in_out = torch.cat((input, output), dim=0).to(device)
-            out, mu, logVar = model(in_out)
-            for i in range(len(in_out)):
-                X_inp.append(reverse_one_hot_encoder(in_out[i].cpu().numpy()))
-                X_out.append(reverse_one_hot_encoder(out[i].cpu().numpy()))
-    return X_inp, X_out
+    # Create lists to store input and output (reconstructions)
+    X_inp, X_out = [], []
 
-X_inp, X_out = validate(model_vae, eval_loader)
+    def validate(model, eval_loader):
+        # Put model in evaluation mode and start reconstructions based on latent vector
+        model.eval()
+        with torch.no_grad():
+            for batch_idx, (input, output) in enumerate(eval_loader):
+                in_out = torch.cat((input, output), dim=0).to(device)
+                out, mu, logVar = model(in_out)
+                for i in range(len(in_out)):
+                    X_inp.append(utils.reverse_one_hot_encoder(in_out[i].cpu().numpy()))
+                    X_out.append(utils.reverse_one_hot_encoder(out[i].cpu().numpy()))
+        return X_inp, X_out
+
+    X_inp, X_out = utils.validate(model_vae, X_inp, X_out, eval_loader)
 
 
-# Visualize five random tasks and their respective reconstructions (output)
-fig, axs = plt.subplots(2, 5, figsize=(15, 6))
-# random.seed(4)
-for i in range(5):
-    # idx = random.randrange(len(X_inp))
-    plot_one(X_inp[i], axs[0,i], i, 'original input')
-    plot_one(X_out[i], axs[1,i], i, 'reconstruction')
+    # Visualize five random tasks and their respective reconstructions (output)
+    fig, axs = plt.subplots(2, 5, figsize=(15, 6))
+    # random.seed(4)
+    for i in range(5):
+        # idx = random.randrange(len(X_inp))
+        visualize.plot_one(X_inp[i], axs[0,i], i, 'original input')
+        visualize.plot_one(X_out[i], axs[1,i], i, 'reconstruction')
 
-# Plot differences between input and output matrices (reconstructions)
-plot_pix_acc(X_inp, X_out)
+    # Plot differences between input and output matrices (reconstructions)
+    visualize.plot_pix_acc(X_inp, X_out)
 
-# Plot heatmap of correct pixel determination by the model (absolute)
-plot_pix_heatmap(X_inp, X_out)
+    # Plot heatmap of correct pixel determination by the model (absolute)
+    visualize.plot_pix_heatmap(X_inp, X_out)
 
 
 """
@@ -717,12 +275,12 @@ First, let's define the type of data (train vs. evaluation) we want to look at.
 """
 
 # Define the data our VAS is looking at
-y_obs = get_all_matrix(y_test) # get the expected output
+y_obs = utils.flatten_dataset(y_test) # get the expected output
 inp_index = np.insert(np.cumsum([len(i) for i in X_train]), 0, 0) # get the precise index of items
 
 # Define loaders for train (example) and test data
-test_loader_few = data_load(X_train, y_train)
-test_loader_sol = data_load(X_test, y_test)
+test_loader_few = dataset.data_load(X_train, y_train)
+test_loader_sol = dataset.data_load(X_test, y_test)
 
 # Define lists of solved items per dataset
 sol_training = [20, 37, 47, 52, 55, 102, 110, 114, 129, 177, 185, 222, 275, 290, 321, 333, 352, 354, 372, 398] # training data
@@ -730,10 +288,10 @@ sol_evaluation = [42, 88, 92, 148, 154, 171, 217, 271, 304, 307, 325, 328, 351, 
 sol_concept = [11, 14, 17, 51, 52, 53, 54, 55, 57, 59, 74, 82, 100, 135] # conceptARC data
 
 # What list to pick based on focus dataset
-sol_full = eval("sol_" + focus)
+sol_full = eval("sol_" + utils.focus)
 
 # Load model for model performance
-model_vae = torch.load('/content/drive/MyDrive/Thesis_LucaThoms/Models/model_128_bce_4k_2s_wd02.pt', map_location=torch.device(device))
+model_vae = torch.load('models/model_128.pt', weights_only=False, map_location=torch.device(device))
 
 """
 #%% md
@@ -781,7 +339,7 @@ def visual_analogy(model, test_loader_few, test_loader_sol, inp_index, comp='ave
             # z_inp = model.reparameterize(mu, logVar)
 
             Z_sol.append(z_inp.cpu().numpy().squeeze())
-            Z_sol_o.append(reverse_one_hot_encoder(output.numpy().squeeze()))
+            Z_sol_o.append(utils.reverse_one_hot_encoder(output.numpy().squeeze()))
 
         Z_avg, Z_sim, Z_cons, Z_rule = [[] for _ in range(4)]
         for i in range(len(inp_index)-1):
@@ -803,13 +361,21 @@ def visual_analogy(model, test_loader_few, test_loader_sol, inp_index, comp='ave
             Z_cons.append(cosine_similarity(Z_temp))
 
             # Check encoding consistency of two rule vector approaches
-            Z_rule.append(np.dot(Z_avg[i], Z_few[idx])/(norm(Z_avg[i])*norm(Z_few[idx])))
+            t1 = (norm(Z_avg[i])*norm(Z_few[idx]))
+            t2 = np.dot(Z_avg[i], Z_few[idx])
+            if t1 == 0:
+                t3 = 0.0
+            else:
+                t3 = t2 / t1
+
+            #print(f"{i},   t2: {t2} / t1: {t1} = t3: {t3}")
+            Z_rule.append(t3)
 
         Z_comp = Z_avg if comp == 'average' else Z_sim
         for i in range(len(Z_comp)):
             z_out = Z_sol[i] + Z_comp[i]
             out = model.decode(torch.tensor(z_out, dtype=torch.float32).unsqueeze(0).to(device))
-            Z_sol_p.append(reverse_one_hot_encoder(out.cpu().numpy()))
+            Z_sol_p.append(utils.reverse_one_hot_encoder(out.cpu().numpy()))
 
     return Z_sol_o, Z_sol_p, Z_cons, Z_rule
 
@@ -822,9 +388,9 @@ while all(i in sol_full for i in sol):
 
     y_pred = []
     for i in range(len(y_obs)):
-        y_pred.append(reverse_scaling(y_obs[i], Z_sol_p[i]))
+        y_pred.append(utils.reverse_scaling(y_obs[i], Z_sol_p[i]))
 
-    sol = solved_tasks(y_obs, y_pred)
+    sol = utils.solved_tasks(y_obs, y_pred)
 
 
 """
@@ -833,16 +399,18 @@ while all(i in sol_full for i in sol):
 Next, we visualize the results and in the next chunk we may also investigate the accuracy of the model.
 """
 
+visualize.plot_arc(325, path ='training')
+
 # Choose the item to display the model's solution
 idx = 74
 
 # Plot ARC item
-plot_ARC(idx, path = 'concept')
+visualize.plot_arc(idx, path ='concept')
 
 # Plot Original and Predicted Output (resized)
 fig, axs = plt.subplots(2, 1, figsize=(6, 6))
-plot_one(y_obs[idx], axs[0], 0, 'correct output')
-plot_one(y_pred[idx], axs[1], 0, 'predicted output')
+visualize.plot_one(y_obs[idx], axs[0], 0, 'correct output')
+visualize.plot_one(y_pred[idx], axs[1], 0, 'predicted output')
 
 # Print Ruel Complexity
 # print('Encoding Rule Consistency {0:.{1}f}:'.format(Z_rule[idx], 2))
@@ -850,7 +418,7 @@ plot_one(y_pred[idx], axs[1], 0, 'predicted output')
 
 
 # Plot differences between original output and predicted output
-plot_pix_acc(y_obs, y_pred, exclude_zero=False)
+visualize.plot_pix_acc(y_obs, y_pred, exclude_zero=False)
 
 """
 ## **Multiple Linear Regression**
@@ -866,10 +434,10 @@ X_inp, X_out = [], []
 X_full = [X + y for X, y in zip(X_train, y_train)]
 inp_index = np.insert(np.cumsum([len(i) for i in X_full]), 0, 0)
 # Create reconstructions for items in questions
-rec_loader = data_load(X_train, y_train)
+rec_loader = dataset.data_load(X_train, y_train)
 X_inp, X_out = validate(model_vae, rec_loader)
 # Calculate reconstruction accuarcy for items in questions
-rec_diff = accuracy(X_inp, X_out)
+rec_diff = utils.accuracy(X_inp, X_out)
 rec_avg = []
 for i in range(len(inp_index)-1):
     rec_avg.append(np.mean(rec_diff[inp_index[i]:inp_index[i+1]], axis=0))
@@ -887,7 +455,7 @@ for _train in [X_train, y_train]:
             ver_per.append(np.count_nonzero(np.diff(np.array(i), axis=0)))
             hor_per.append(np.count_nonzero(np.diff(np.array(i), axis=-1)))
 
-            d, _ = scaling(np.array(i), 30, 30, direction='rev')
+            d, _ = utils.scaling(np.array(i), 30, 30, direction='rev')
             sca_per.append(d)
 
         col_avg.append(np.mean(col_per)) # Average colors (i.e., how many unique colors)
@@ -905,12 +473,12 @@ for item_x, item_y in zip(X_train, y_train):
         xy_col.append(set(np.unique(np.array(x))) == set(np.unique(np.array(y))))
         xy_size.append(np.array(x).shape == np.array(y).shape)
 
-        x_sca.append(scaling(np.array(x), 30, 30))
-        y_sca.append(scaling(np.array(y), 30, 30))
+        x_sca.append(utils.scaling(np.array(x), 30, 30))
+        y_sca.append(utils.scaling(np.array(y), 30, 30))
 
     col_change.append(0 if all(xy_col) else 1) # Binary; color changes between input to output
     size_change.append(0 if all(xy_size) else 1) # Binary; size changes between input to output
-    sim_avg.append(np.mean(accuracy(x_sca, y_sca))) # Average similarity between input and output
+    sim_avg.append(np.mean(utils.accuracy(x_sca, y_sca))) # Average similarity between input and output
 
 ## Features for example input to test input changes - always calculated per item
 col_change_t, size_change_t = [[] for _ in range(2)]
@@ -927,12 +495,12 @@ for item_x, item_t in zip(X_train, X_test):
 
 ## Dependent Variable: Accuracy (30x30 vs Original)
 dep = "30" # or "original"
-acc = accuracy(Z_sol_o, Z_sol_p) if dep != "original" else accuracy(y_obs, y_pred) # last accuracy() is "original" size
+acc = utils.accuracy(Z_sol_o, Z_sol_p) if dep != "original" else utils.accuracy(y_obs, y_pred) # last accuracy() is "original" size
 
 ## Split concatenated features from above (containing input and output features) into halves
 feature_split = {}
 for feature in ["col_avg", "void_avg", "size_avg", "cha_avg", "sca_avg", "size_diff"]:
-    feature_split[f'{feature}_x'], feature_split[f'{feature}_y'] = split_list(eval(feature))
+    feature_split[f'{feature}_x'], feature_split[f'{feature}_y'] = utils.split_list(eval(feature))
 
 ## Create final DataFrame
 (data := pd.DataFrame({'Number_Examples': item_len,
@@ -990,34 +558,7 @@ print('=========================================================================
 # print('==============================================================================\n          Multicollinearity\n', vif_data.to_string(index=False))
 
 
-
-sns.scatterplot(
-    data=data,
-    x="Average_Zeros_X",
-    y="Average_Zeros_Y",
-    hue="Average_Zeros_X",
-    legend=None)
-sns.despine()
-plt.xlabel('Average % of Zero in Example Inputs')
-plt.ylabel('Average % of Zero in Example Outputs')
-plt.show();
-
-X = data.iloc[:, 0:-1]
-corr = X.corr(method='spearman')
-
-# Generate mask for upper triangle (just symmetric)
-mask = np.zeros_like(corr, dtype=bool)
-mask[np.triu_indices_from(mask)] = True
-
-# Create custom colormap to highlight pos. & neg. correlations
-cmap = sns.diverging_palette(220, 10, as_cmap=True, sep=100)
-
-# Draw heatmap (/w mask & colormap)
-fig, ax = plt.subplots(figsize=(7, 6))
-sns.heatmap(corr, mask=mask, cmap=cmap, vmin=-1, vmax=1, center=0, linewidths=.5)
-fig.suptitle('Correlation Matrix: Features', fontsize=15, weight='bold')
-fig.tight_layout()
-
+visualize.do_scatter_plot(data)
 
 """
 ## **Appendix**
