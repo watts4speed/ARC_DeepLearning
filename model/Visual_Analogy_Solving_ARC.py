@@ -24,6 +24,7 @@ import utils
 import math
 import dataset
 import models
+import basic_vae
 
 plot_all = False
 
@@ -90,7 +91,10 @@ y_training, y_validation = [y_train[i] for i in train_idx], [y_train[i] for i in
 
 
 # Define model
-vae = models.VariationalAutoencoder().to(device)
+#vae = models.VariationalAutoencoder().to(device)
+vae = basic_vae.VariationalAutoencoder().to(device)
+
+
 if os.path.isfile('models/model_128.pt'):
     vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
 
@@ -102,7 +106,7 @@ test_loader = dataset.data_load(X_test, y_test)
 if not os.path.exists('models'):
     os.makedirs('models')
 
-if False or not os.path.isfile('models/model_128.pt'): # Train
+if True or not os.path.isfile('models/model_128.pt'): # Train
 
     for r in range(10):
         def test_error(model, test_loader):
