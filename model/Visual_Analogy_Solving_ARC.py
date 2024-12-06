@@ -102,9 +102,9 @@ test_loader = dataset.data_load(X_test, y_test)
 if not os.path.exists('models'):
     os.makedirs('models')
 
-if True or not os.path.isfile('models/model_128.pt'): # Train
+if False or not os.path.isfile('models/model_128.pt'): # Train
 
-    for r in range(1000):
+    for r in range(10):
         def test_error(model, test_loader):
             model.eval()
             loss = 0
@@ -118,7 +118,7 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
 
         # Training the network for a given number of epochs
         def train(model, train_loader, epochs=50):
-            optimizer = AdamW(model.parameters(), lr=0.001, weight_decay=0.2)
+            optimizer = AdamW(model.parameters(), lr=0.00005, weight_decay=0.2)
             for epoch in range(epochs):
                 model.train()
                 train_loss = 0
@@ -185,22 +185,22 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
 
 
         # Create lists to store input and output (reconstructions)
-        # X_inp, X_out = [], []
-        # X_inp, X_out = utils.validate(model_vae, eval_loader, X_inp, X_out, device)
-        # # Plot differences between input and output matrices (reconstructions)
-        # visualize.plot_pix_acc(X_inp, X_out, title='eval_loader')
+        X_inp, X_out = [], []
+        X_inp, X_out = utils.validate(model_vae, eval_loader, X_inp, X_out, device)
+        # Plot differences between input and output matrices (reconstructions)
+        visualize.plot_pix_acc(X_inp, X_out, title='eval_loader')
 
 
-        # # Visualize five random tasks and their respective reconstructions (output)
-        # fig, axs = plt.subplots(2, 5, figsize=(15, 6))
-        # # random.seed(4)
-        # for i in range(5):
-        #     # idx = random.randrange(len(X_inp))
-        #     visualize.plot_one(X_inp[i], axs[0,i], i, 'original input')
-        #     visualize.plot_one(X_out[i], axs[1,i], i, 'reconstruction')
+        # Visualize five random tasks and their respective reconstructions (output)
+        fig, axs = plt.subplots(2, 5, figsize=(15, 6))
+        # random.seed(4)
+        for i in range(5):
+            # idx = random.randrange(len(X_inp))
+            visualize.plot_one(X_inp[i], axs[0,i], i, 'original input')
+            visualize.plot_one(X_out[i], axs[1,i], i, 'reconstruction')
 
         # Plot heatmap of correct pixel determination by the model (absolute)
-        #visualize.plot_pix_heatmap(X_inp, X_out)
+        visualize.plot_pix_heatmap(X_inp, X_out)
 
 
 """
@@ -329,7 +329,7 @@ while all(i in sol_full for i in sol):
         y_pred.append(utils.reverse_scaling(y_obs[i], Z_sol_p[i]))
 
     sol = utils.solved_tasks(y_obs, y_pred)
-
+do_break = False
 
 """
 ### **Display Predictions**
@@ -337,7 +337,10 @@ while all(i in sol_full for i in sol):
 Next, we visualize the results and in the next chunk we may also investigate the accuracy of the model.
 """
 
+visualize.plot_arc(304, path ='training')
 visualize.plot_arc(325, path ='training')
+visualize.plot_arc(351, path ='training')
+visualize.plot_arc(363, path ='training')
 
 # Choose the item to display the model's solution
 idx = 74
