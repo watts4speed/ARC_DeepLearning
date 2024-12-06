@@ -86,5 +86,3 @@ class VariationalAutoencoder(nn.Module):
         out = self.decode(z)
         return out, mu, logVar
 
-# Print Architecture
-print(VariationalAutoencoder())

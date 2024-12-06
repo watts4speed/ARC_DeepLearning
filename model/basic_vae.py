@@ -256,11 +256,11 @@ class Decoder(nn.Module):
 #         return self.decoder(z)
 
 class VariationalAutoencoder(nn.Module):
-    def __init__(self, img_channels=10, feature_dim=[128, 2, 2], latent_dim=128):
+    def __init__(self, img_channels=10, feature_dim=[64, 2, 2], latent_dim=128):
         super(VariationalAutoencoder, self).__init__()
 
         ddconfig = dict(
-            dropout=0.0, ch=128, z_channels=latent_dim,
+            dropout=0.0, ch=latent_dim, z_channels=64,
             in_channels=10, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2,  # from vq-f16/config.yaml above
             using_sa=True, using_mid_sa=True,  # from vq-f16/config.yaml above
             # resamp_with_conv=True,   # always True, removed.
@@ -345,5 +345,3 @@ class VariationalAutoencoder(nn.Module):
         out = self.decode(z)
         return out, mu, logVar
 
-# Print Architecture
-print(VariationalAutoencoder())
