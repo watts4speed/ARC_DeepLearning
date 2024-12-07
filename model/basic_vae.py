@@ -261,7 +261,7 @@ class VariationalAutoencoder(nn.Module):
 
         ddconfig = dict(
             dropout=0.0, ch=latent_dim, z_channels=64,
-            in_channels=10, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2,  # from vq-f16/config.yaml above
+            in_channels=img_channels, ch_mult=(1, 1, 2, 2, 4), num_res_blocks=2,  # from vq-f16/config.yaml above
             using_sa=True, using_mid_sa=True,  # from vq-f16/config.yaml above
             # resamp_with_conv=True,   # always True, removed.
         )
@@ -312,11 +312,13 @@ class VariationalAutoencoder(nn.Module):
         #                        kernel_size=kernel_vae,
         #                        stride=stride_vae),
         #     nn.Sigmoid())
+        self.sigmoid = nn.Sigmoid()
 
     def encode(self, x):
         # Input is fed into convolutional layers sequentially
         # The output feature map are fed into 2 fully-connected layers to predict mean (mu) and variance (logVar)
         # Mu and logVar are used for generating middle representation z and KL divergence loss
+        x = F.pad(x, pad=(1, 1, 1, 1))
         x = self.encoder(x)
         x = x.view(-1, np.prod(self.f_dim))
         mu = self.fc_mu(x)
@@ -335,6 +337,9 @@ class VariationalAutoencoder(nn.Module):
         x = self.dec_inp(z)
         x = x.view(-1, self.f_dim[0], self.f_dim[1], self.f_dim[2])
         x = self.decoder(x)
+        b, c, h, w = x.size()
+        x = x[...,1:h-1, 1:w-1]
+        x = self.sigmoid(x)
         return x.squeeze()
 
     def forward(self, x):
