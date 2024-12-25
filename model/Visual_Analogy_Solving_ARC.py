@@ -99,7 +99,7 @@ if os.path.isfile('models/model_128.pt'):
     vae.load_state_dict(torch.load('models/model_128.pt', weights_only=True, map_location=torch.device(device)))
 
 # Load "training" data into PyTorch Framework
-batch_size = 64
+batch_size = 32
 train_loader = dataset.data_load(X_training, y_training, aug=[True, True, True], batch_size=batch_size, shuffle=True)
 test_loader = dataset.data_load(X_test, y_test)
 
@@ -108,7 +108,7 @@ if not os.path.exists('models'):
 
 if True or not os.path.isfile('models/model_128.pt'): # Train
 
-    for r in range(10):
+    for r in range(1000):
         def test_error(model, test_loader):
             model.eval()
             loss = 0
@@ -122,7 +122,7 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
 
         # Training the network for a given number of epochs
         def train(model, train_loader, epochs=50):
-            optimizer = AdamW(model.parameters(), lr=0.00005, weight_decay=0.2)
+            optimizer = AdamW(model.parameters(), lr=0.000025, weight_decay=0.2)
             for epoch in range(epochs):
                 model.train()
                 train_loss = 0
@@ -153,17 +153,17 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
 
                 test_loss = test_error(model, test_loader)
 
-                if epoch % 5 == 0:
+                if epoch % 1 == 0:
                     print(f'Epoch: {epoch+1}, Loss: {train_loss/(len(train_loader)*batch_size):.1f}  '
                           f'test_loss: {test_loss:.1f}')
                     train_loss = 0
 
-                if epoch % 100 == 0:
-                    torch.save(model.state_dict(), 'models/model_128.pt')
+                #if epoch % 1 == 0:
+            torch.save(model.state_dict(), 'models/model_128.pt')
 
             return model
 
-        vae_final = train(vae, train_loader, epochs=100)
+        vae_final = train(vae, train_loader, epochs=10)
 
         torch.save(vae_final.state_dict(), 'models/model_128.pt')
 
@@ -202,9 +202,10 @@ if True or not os.path.isfile('models/model_128.pt'): # Train
             # idx = random.randrange(len(X_inp))
             visualize.plot_one(X_inp[i], axs[0,i], i, 'original input')
             visualize.plot_one(X_out[i], axs[1,i], i, 'reconstruction')
+        plt.show()
 
         # Plot heatmap of correct pixel determination by the model (absolute)
-        visualize.plot_pix_heatmap(X_inp, X_out)
+        # visualize.plot_pix_heatmap(X_inp, X_out)
 
 
 """
